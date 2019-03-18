@@ -1,3 +1,4 @@
+=begin
 if defined?(Logger)
 
   class Logger
@@ -50,3 +51,4 @@ if defined?(ActiveSupport::BufferedLogger)
   end
 
 end
+=end

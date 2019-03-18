@@ -101,93 +101,95 @@ module RawkLog
       last_date = Date.civil
       line_no = 1
       $stdout.flush
+      info_by_pid = {}
+
       while @input.gets
         line_no += 1
         $stdout.write "." if @verbose && (line_no % 1000) == 0
-        next unless $_ =~ /^[PSC]/
-        if $_.index("Processing by ")==0
-          action = $_.split[2]
-          pid = $_[/\(pid\:\d+\)/]
-          last_actions[pid]=action if pid
-        elsif $_.index("Started ")==0
-          date_string = $_[/(?:19|20)[0-9]{2}-(?:0[1-9]|1[012])-(?:0[1-9]|[12][0-9]|3[01])/]
+        rgxp = /^I, [^\]]+\]  INFO -- : \[([^\]]+)\] ([SPC].*)/.match($_)
+        next unless rgxp
+        pid = rgxp[1]
+        log_line = rgxp[2]
+        if log_line.index("Started ")==0
+          date_string = log_line[/(?:19|20)[0-9]{2}-(?:0[1-9]|1[012])-(?:0[1-9]|[12][0-9]|3[01])/]
           date = date_string ? Date.parse(date_string) : last_date
           last_date = date
-          datetime = $_[/(?:19|20)[0-9]{2}-(?:0[1-9]|1[012])-(?:0[1-9]|[12][0-9]|3[01]) (?:[0-1][0-9]|2[0-3]):(?:[0-5][0-9]|60):(?:[0-5][0-9]|60)/].to_s
+          datetime = log_line[/(?:19|20)[0-9]{2}-(?:0[1-9]|1[012])-(?:0[1-9]|[12][0-9]|3[01]) (?:[0-1][0-9]|2[0-3]):(?:[0-5][0-9]|60):(?:[0-5][0-9]|60)/].to_s
+          info_by_pid[pid]={
+            date: date,
+            datetime: datetime,
+            url: log_line.split[2],
+          }
           next
-        elsif $_.index("Processing ")==0
-          action = $_.split[1]
-          pid = $_[/\(pid\:\d+\)/]
-          date_string = $_[/(?:19|20)[0-9]{2}-(?:0[1-9]|1[012])-(?:0[1-9]|[12][0-9]|3[01])/]
-          date = date_string ? Date.parse(date_string) : last_date
-          last_date = date
-          datetime = $_[/(?:19|20)[0-9]{2}-(?:0[1-9]|1[012])-(?:0[1-9]|[12][0-9]|3[01]) (?:[0-1][0-9]|2[0-3]):(?:[0-5][0-9]|60):(?:[0-5][0-9]|60)/].to_s
-          last_actions[pid]=action if pid
+        elsif log_line.index("Processing by ")==0
+          e_info = info_by_pid[pid]
+          next unless e_info
+          e_info[:action] = log_line.split[2]
           next
-        end
-        next unless $_.index("Completed ")==0 and $_ =~ /^Completed( \d+ \w+)? in/
-        pid = key = nil
-        #get the pid unless we are forcing url tracking
-        pid = $_[/\(pid\:\d+\)/] if !@force_url_use
-        key = last_actions[pid] if pid
-        time = 0.0
+        elsif log_line.index("Completed ")==0 and log_line =~ /^Completed( \d+ \w+)? in/
+          e_info = info_by_pid[pid]
+          next unless e_info
 
-        # Old: Completed in 0.45141 (2 reqs/sec) | Rendering: 0.25965 (57%) | DB: 0.06300 (13%) | 200 OK [http://localhost/jury/proposal/312]
-        # New:  Completed in 100ms (View: 40, DB: 4) 
+          time = 0.0
+          # New:  Completed in 100ms (Views: 40ms | ActiveRecord: 4.2ms) 
+          if @db_time
+            time_string = log_line[/ActiveRecord: \d+(\.\d+)?[ms]*/]
+          elsif @render_time
+            time_string = log_line[/Views: \d+(\.\d+)?[ms]*/]
+          else
+            time_string = log_line[/Completed( \d+ \w+)? in \d+(\.\d+)?[ms]*/]
+            time_string = time_string[/ in .*/]
+          end
+          time_in_ms = time_string && (time_string =~ /ms/ || time_string !~ /\.\d/)
+          time_string = time_string[/\d+(\.\d+)?/] if time_string
+          if time_string
+            time = time_string.to_f
+            time /= 1000.0 if time_in_ms
+          end 
+          key = e_info[:action]
 
-        if @db_time
-          time_string = $_[/DB: \d+(\.\d+)?[ms]*/]
-        elsif @render_time
-          time_string = $_[/(View|Rendering): \d+(\.\d+)?[ms]*/]
-        else
-          time_string = $_[/Completed( \d+ \w+)? in \d+(\.\d+)?[ms]*/]
-          time_string = time_string[/ in .*/]
-        end
-        time_in_ms = time_string && (time_string =~ /ms/ || time_string !~ /\.\d/)
-        time_string = time_string[/\d+(\.\d+)?/] if time_string
-        if time_string
-          time = time_string.to_f
-          time /= 1000.0 if time_in_ms
-        end
-
-        #if pids are not specified then we use the url for hashing
-        #the below regexp turns "[http://spongecell.com/calendar/view/bob]" to "/calendar/view"
-        unless key
-          uri = $_[/\[[^\]]+\]/]
-          if uri and uri != ''
-            key = if @force_url_use
-                    (uri.gsub(/\S+\/\/(\w|\.)*/, ''))[/[^\?\]]*/]
-                  else
-                    data = uri.gsub(/\S+\/\/(\w|\.)*/, '')
-                    s = data.gsub(/(\?.*)|\]$/, '').split("/")
-
-                    keywords = s.inject([]) do |keywords, word|
-                      if is_id?(word.to_s)
-                        keywords << '{ID}'
-                      elsif !word.to_s.empty?
-                        keywords << word.to_s
+          #if pids are not specified then we use the url for hashing
+          #the below regexp turns "[http://spongecell.com/calendar/view/bob]" to "/calendar/view"
+          unless key
+            uri = e_info[:url][/\[[^\]]+\]/]
+            if uri and uri != ''
+              key = if @force_url_use
+                      (uri.gsub(/\S+\/\/(\w|\.)*/, ''))[/[^\?\]]*/]
+                    else
+                      data = uri.gsub(/\S+\/\/(\w|\.)*/, '')
+                      s = data.gsub(/(\?.*)|\]$/, '').split("/")
+  
+                      keywords = s.inject([]) do |keywords, word|
+                        if is_id?(word.to_s)
+                          keywords << '{ID}'
+                        elsif !word.to_s.empty?
+                          keywords << word.to_s
+                        end
+                        keywords
                       end
-                      keywords
+                      keywords[-1] = '{filename}' if !keywords.empty? and is_filename?(keywords[-1])
+                      k = "/#{keywords.join("/")}"
                     end
-                    keywords[-1] = '{filename}' if !keywords.empty? and is_filename?(keywords[-1])
-                    k = "/#{keywords.join("/")}"
-                  end
+            end
           end
-        end
-
-        unless key
-          key = "Unknown"
-          puts "Found Completed without url #{pid ? '' : 'or pid '}at line #{line_no}"
-        end
-
-        if (@from.nil? or @from <= date) and (@to.nil? or @to >= date) # date criteria here
-          @stat_hash.add(key, time)
-          @total_stat.add(time)
-          if @worst_requests.length<@worst_request_length || @worst_requests[@worst_request_length-1][0]<time
-            @worst_requests << [time, %Q(#{datetime} #{$_})]
-            @worst_requests.sort! { |a, b| (b[0] && a[0]) ? b[0]<=>a[0] : 0 }
-            @worst_requests=@worst_requests[0, @worst_request_length]
+  
+          unless key
+            key = "Unknown"
+            puts "Found Completed without url #{pid ? '' : 'or pid '}at line #{line_no}"
           end
+  
+          if (@from.nil? or @from <= date) and (@to.nil? or @to >= date) # date criteria here
+            @stat_hash.add(key, time)
+            @total_stat.add(time)
+            if @worst_requests.length<@worst_request_length || @worst_requests[@worst_request_length-1][0]<time
+              @worst_requests << [time, %Q(#{e_info[:datetime]} #{e_info[:action]} #{log_line})]
+              @worst_requests.sort! { |a, b| (b[0] && a[0]) ? b[0]<=>a[0] : 0 }
+              @worst_requests=@worst_requests[0, @worst_request_length]
+            end
+          end
+         
+          #now free up mem from this entry
+         info_by_pid.delete(pid)
         end
       end
       $stdout.flush
