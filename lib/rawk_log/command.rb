@@ -146,7 +146,7 @@ module RawkLog
             time = time_string.to_f
             time /= 1000.0 if time_in_ms
           end 
-          key = e_info[:action]
+          key = @force_url_use ? e_info[:url] : e_info[:action]
 
           #if pids are not specified then we use the url for hashing
           #the below regexp turns "[http://spongecell.com/calendar/view/bob]" to "/calendar/view"
@@ -182,7 +182,7 @@ module RawkLog
             @stat_hash.add(key, time)
             @total_stat.add(time)
             if @worst_requests.length<@worst_request_length || @worst_requests[@worst_request_length-1][0]<time
-              @worst_requests << [time, %Q(#{e_info[:datetime]} #{e_info[:action]} #{log_line})]
+              @worst_requests << [time, %Q(#{e_info[:datetime]} #{key} #{log_line})]
               @worst_requests.sort! { |a, b| (b[0] && a[0]) ? b[0]<=>a[0] : 0 }
               @worst_requests=@worst_requests[0, @worst_request_length]
             end
