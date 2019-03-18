@@ -182,7 +182,7 @@ module RawkLog
             @stat_hash.add(key, time)
             @total_stat.add(time)
             if @worst_requests.length<@worst_request_length || @worst_requests[@worst_request_length-1][0]<time
-              @worst_requests << [time, %Q(#{e_info[:datetime]} #{key} #{log_line})]
+              @worst_requests << [time, %Q(#{e_info[:datetime]}; #{key}; #{log_line}; #{e_info[:url]})]
               @worst_requests.sort! { |a, b| (b[0] && a[0]) ? b[0]<=>a[0] : 0 }
               @worst_requests=@worst_requests[0, @worst_request_length]
             end
